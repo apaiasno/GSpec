@@ -1,0 +1,270 @@
+classdef DM < matlab.mixin.Copyable
+    % DM: MATLAB class to control Boston Micromachines deformable mirror
+    % (Multi-DM)
+    % 
+    % Object methods:
+    % DM: Construct an instance of this class and sets up DM device to flat
+    % map provided by manufacturer.
+    % sendShape: Sets all DM actuators to an input shape (140 x 1 actuator 
+    % voltage values)
+    % setFlat: Sets DM to manufacturer-provided flat map.
+    % setZero: Sets all DM actuators to 0.
+    % setPoints: Sets specified DM actuators (first column in array of
+    % points) to voltage values (second column)
+    % Sets DM to user-defined Zernike modes.
+    % 
+    % disconnect: Closes the connection with the Thorlabs power meter device.
+    
+    properties
+        dm; % Object associated with Multi-DM device
+        shape; % Array of current voltage values of each actuator (DM shape)
+        zernike; % Zernike coefficients in OSA index order
+    end
+    
+    methods(Static)
+        function shape = MakeShape(points, DC)
+            % Converts mapping of DM actuators --> value to a DM shape
+            % Inputs:
+            % points: 2D array (DM size x 2), first column is indices of actuators and
+            % second column is value to offset by relative to DC/flat map
+            % DC: either 1D array or false. If 1D array, defines voltages
+            % for each actuator that points are defined relative to; if
+            % false, points are defined relative to manufacturer's flat map.
+            %
+            % Outputs:
+            % shape: 1D array of actuator values readable by DM
+            
+            if ~DC
+                shape = importdata('C:\Program Files\Boston Micromachines\Shapes\17BW007#083_FLAT_MAP_COMMANDS.txt');
+            else
+                shape = DC;
+            end
+            points_size = size(points);
+            points_size = points_size(1);
+            DM_size = numel(shape);
+            for i = 1:points_size
+                if (points(i,1) < 1) || (points(i,1) > DM_size)
+                    error('ValueError: actuator index '+string(i)+' must be between 1 and '+string(DM_size)+'.')
+                else
+                    shape(points(i,1)) = shape(points(i,1)) + points(i,2);
+                end
+            end
+
+            if (min(shape, [], 'all') < 0) || (max(shape, [], 'all') > 1)
+                error("ValueError: input shape must have values between 0 and 1.")
+            end
+        end
+            
+        function points = MakeZernikePoints(aber_sizes, coefs, ns, ms, DM_size, offsets)
+            % Returns a DM shape of size DM_size corresponding to a Zernike polynomial.
+            % Removes corners.
+            % Inputs:
+            % aber_size: 1xk, diameters of aberrations for all k Zernike modes being
+            % set
+            % coefs: 1xk matrix, coefficients for all k Zernike modes being set
+            % ns: 1xk matrix, radial degree for all k Zernike modes being set
+            % ms: 1xk matrix, azimuthal degrees for all k Zernike modes being set
+            % DM_size: integer, size of deformable mirror
+            % offsets: kx2 matrix, [x,y] offsets for all k Zernike modes being set
+            % relative to center
+            %
+            % Outputs:
+            % points: 2D array (DM size x 2), first column is indices of actuators and
+            % second column is value of Zernike modes superposed on deformable mirror grid
+
+            % Combine Zernike modes
+            map_mat = zeros(DM_size, DM_size);
+            for i = 1:numel(coefs)
+                map_mat = map_mat + coefs(i) * zernike_DM(aber_sizes(i), ns(i), ms(i), DM_size, offsets(i,:));
+            end
+
+            % Convert to DM readable format with corners removed
+            map_mat_T = map_mat';
+            zernike = map_mat_T(:);
+            remove = [1, DM_size, DM_size^2 - DM_size + 1, DM_size^2];
+            zernike(remove) = [];
+            points = [linspace(1, DM_size^2-4, DM_size^2-4)' zernike];
+        end
+    end
+    
+    methods
+        function obj = DM()
+            % Sets up the Boston Micromachines Multi-DM for shaping.
+            % Inputs:
+            % None
+            %
+            % Outputs:
+            % obj: DM object
+            
+            %% Set up path
+            if ispc
+                addpath('C:\Program Files\Boston Micromachines\Bin64\Matlab')
+            else
+                addpath(fullfile('/opt','Boston Micromachines','lib','Matlab'))
+            end
+
+            % ATTENTION: change this string to match the serial number of your hardware
+            serialNumber = 'MultiUSB000';
+            
+            %% Open the connection to the driver
+            disp('Opening connection to Multi-DM driver...')
+            [err_code, obj.dm] = BMCOpenDM(serialNumber);
+            if err_code
+                error(BMCGetErrorString(err_code))
+            end
+            disp('Setting Multi-DM to flat map...')
+            obj.setFlat();    
+        end
+        
+        function sendShape(obj, shape)
+            % Sets all DM actuators to an input shape, fixed until reset.
+            % Inputs:
+            % shape: 1D array (size of DM), represents values to which actuators will be
+            % set
+            %
+            % Outputs:
+            % None
+            
+            if (min(shape, [], 'all') < 0) || (max(shape, [], 'all') > 1)
+                error("ValueError: input shape must have values between 0 and 1.")
+            end
+            
+            if numel(shape) ~= obj.dm.size
+                error("ValueError: input shape must have size "+string(obj.dm.size))
+            end
+            
+            BMCSendData(obj.dm, shape);
+            obj.shape = BMCGetActuatorData(obj.dm)';
+            obj.zernike = false;
+            disp('Setting DM to shape complete.');
+        end
+        
+        function setFlat(obj)
+            % Sets Multi-DM to manufacturer-provided flat map.
+            % Inputs:
+            % obj: DM object
+            %
+            % Outputs:
+            % None
+            
+            shape = importdata('C:\Program Files\Boston Micromachines\Shapes\17BW007#083_FLAT_MAP_COMMANDS.txt');
+            sendShape(obj, shape);
+        end  
+        
+        function setZero(obj)
+            % Zeros Multi-DM.
+            % Inputs:
+            % obj: DM object
+            %
+            % Outputs:
+            % None
+            
+            shape = zeros(obj.dm.size, 1);
+            sendShape(obj, shape);
+        end  
+        
+        function setPoints(obj, points, DC)
+            % Sets specified DM actuators to a fixed shape until reset. Unlike 
+            % sendShape(), this function only requires assigning values
+            % to specific actuators (points) RELATIVE TO THE FLAT MAP
+            % as opposed to defining values for all  (shape). Unspecified 
+            % actuators are set to their flat map value.
+            %
+            % Inputs:
+            % obj: DM object
+            % points: 2D array (DM size x 2), first column is actuator index
+            % (1 - 140) and the second column is value to offset by, relative 
+            % to the flat map
+            % DC: either 1D array or false. If 1D array, defines reference
+            % voltages for each actuator that  thpoints are defined relative to; if
+            % false, points are defined relative to manufacturer's flat map.
+            %
+            % Outputs:
+            % None
+            shape = DM.MakeShape(points, DC);
+            obj.sendShape(shape);
+        end
+        
+        function setZernike(obj, modes, coefs, flat)
+            % Sets DM to user-defined Zernike modes.
+            % Inputs:
+            % obj: DM object
+            % modes: 1D array of OSA indices of Zernike modes to set
+            % coefs: 1D array of Zernike coefficients (RMS)of respective modes
+            % in units of nm.
+            % flat: % flat: 2D surface array (in units of nm) to describe base 
+            % DM map on top of which Zernike modes are applied
+            %
+            % Outputs:
+            % None
+            if ispc
+                profileDir = 'C:\Program Files\Boston Micromachines\Profiles';
+            else
+                profileDir = fullfile('/opt','Boston Micromachines','Profiles');
+            end
+            calibrationDir = fullfile(profileDir, '..', 'Calibration');
+            
+            % Load calibration table
+            err_code = BMCLoadCalibrationFile(obj.dm, fullfile(calibrationDir, 'Sample_Multi_OLC1_CAL.mat'));
+            w = obj.dm.width;
+            
+            Zernike_coefficients = zeros(1, max(modes));
+            Zernike_coefficients(modes+1) = coefs;
+            [err_code, surface] = BMCZernikeSurface(obj.dm, Zernike_coefficients, w-1, 0);
+            surface = surface + flat;
+            if (err_code)
+                error(BMCGetErrorString(err_code));
+            end
+            err_code = BMCSetSurface(obj.dm, surface);
+            if (err_code)
+                error(BMCGetErrorString(err_code));
+            end
+            obj.shape = BMCGetActuatorData(obj.dm)';
+            obj.zernike = Zernike_coefficients;
+        end
+        
+        function surface_dm = plotSurface(obj)
+            % Plots current DM surface.
+            % Inputs:
+            % obj: DM object
+            %
+            % Outputs:
+            % 2D surface plot of DM actuator voltages (in DM user units, 0 to 1)
+            
+            % Format DM actuator data into surface
+            w = obj.dm.width;
+            shape = obj.shape;
+            surface = [NaN; shape(1:w-2); NaN; shape(w-1:w^2 - w - 2); NaN; shape(w^2 - w - 1:end); NaN];
+            surface_dm = [0.5; shape(1:w-2); 0.5; shape(w-1:w^2 - w - 2); 0.5; shape(w^2 - w - 1:end); 0.5];
+            surface = reshape(surface, w, w);
+            surface_dm = reshape(surface_dm, w, w);
+            
+            % Define red-blue colormap
+            cMap = interp1([0; 0.5; 1], [0 0 1; 1 1 1; 1 0 0], linspace(0, 1, 256));
+            
+            % Plot
+            p = imagesc(surface);
+            axis image off
+            set(p, 'AlphaData', ~isnan(surface));
+            colormap(cMap);
+            colorbar;
+        end
+        
+        function disconnect(obj)
+            % Closes the connection with the Thorlabs power meter device.
+            % Inputs:
+            % obj: DM object 
+            %
+            % Outputs:
+            % None
+            
+            %% Clean up: Close the driver
+            BMCCloseDM(obj.dm);
+            disp('Boston Micromachines Multi-DM connection closed.')
+        end
+    end
+end
+
+    
+        
+        

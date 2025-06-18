@@ -1,0 +1,73 @@
+% OHIO
+
+duration = 1;
+
+letter_O_ind = [49:55,61,67,73,79,85,91,97:103];
+letter_O_val = ones(numel(letter_O_ind),1) * -0.3;
+letter_O = [letter_O_ind; letter_O_val.'].';
+letter_O_shape = MakeShape(letter_O);
+
+letter_H_ind = [49:55,64,76,88,97:103];
+letter_H_val = ones(numel(letter_H_ind),1) * -0.3;
+letter_H = [letter_H_ind; letter_H_val.'].';
+letter_H_shape = MakeShape(letter_H);
+
+letter_I_ind = [49,55,61,67,73:79,85,91,97,103];
+letter_I_val = ones(numel(letter_I_ind),1) * -0.3;
+letter_I = [letter_I_ind; letter_I_val.'].';
+letter_I_shape = MakeShape(letter_I);
+
+if (min(letter_O_shape, [], 'all') < 0) || (max(letter_O_shape, [], 'all') > 1)
+    error("ValueError: input shape must have values between 0 and 1.")
+end
+if (min(letter_H_shape, [], 'all') < 0) || (max(letter_H_shape, [], 'all') > 1)
+    error("ValueError: input shape must have values between 0 and 1.")
+end
+if (min(letter_I_shape, [], 'all') < 0) || (max(letter_I_shape, [], 'all') > 1)
+    error("ValueError: input shape must have values between 0 and 1.")
+end
+
+if duration < 0
+    error("ValueError: duration must be a float/integer greater than or equal to 0.")
+end
+
+%% Set up path
+if ispc
+    addpath('C:\Program Files\Boston Micromachines\Bin64\Matlab')
+else
+    addpath(fullfile('/opt','Boston Micromachines','lib','Matlab'))
+end
+
+% ATTENTION: change this string to match the serial number of your hardware
+serialNumber = 'MultiUSB000';
+
+%% Open the connection to the driver
+[err_code, dm] = BMCOpenDM(serialNumber);
+if err_code
+    error(BMCGetErrorString(err_code))
+end
+
+disp('DM size: '+string(dm.size));
+if numel(data) ~= dm.size
+    error("ValueError: input shape must have size "+string(dm.size))
+end
+
+%% Send shape to DM
+BMCSendData(dm, letter_O_shape);
+pause(duration)
+BMCSendData(dm, letter_H_shape);
+pause(duration)
+BMCSendData(dm, letter_I_shape);
+pause(duration)
+BMCSendData(dm, letter_O_shape);
+pause(duration)
+%% Clean up: Close the driver
+BMCCloseDM(dm);
+disp('Setting DM to shape complete.');
+
+
+
+
+
+
+

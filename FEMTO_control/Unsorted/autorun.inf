@@ -1,0 +1,4 @@
+[AutoRun]
+icon=LUCI_logo.ico
+label=LUCI-10
+open=""Luci-10 Software Suite\setup.exe""
